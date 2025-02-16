@@ -4,9 +4,12 @@ import os
 import time
 from datetime import datetime, timedelta
 import pandas as pd
+import baostock as bs
+import akshare as ak
 # 初始化pro接口
 pro = ts.pro_api('31b92128e3ab8eb41a12d9a5fac8cb9bfacaee29fb591eba91d9c675')
-#构造因子的时间段为2014-01-01到2020-12-31
+#构造因子的时间段为2019-01-01到2023-12-31
+lg=bs.login()
 
 class getdata():
 
@@ -172,59 +175,189 @@ class getdata():
         df.to_csv("数据/沪深交易所交易日历.csv", mode='a', index=False, header=not os.path.exists("数据/交易日历.csv"))
     
     @staticmethod
-    def filter_zhongzheng500_paused_stocks(threshold,now_date):
-        #过滤掉上市天数不足threshold的股票
+    def filter_zhongzheng500_paused_stocks(threshold):
         try:
             # 读取中证500成分股数据
             zhongzheng500_stocks = pd.read_csv("数据/中证500成分股.csv")
-            # 获取唯一的股票代码
-            unique_stocks = zhongzheng500_stocks['con_code'].unique()
-            
-            # 分批获取股票的上市日期
-            batch_size = 900  # 设置每批次处理的股票数量
-            stock_list_dates_all = []
-            
-            for i in range(0, len(unique_stocks), batch_size):
-                batch_stocks = unique_stocks[i:i+batch_size]
-                batch_data = pro.stock_basic(
-                    ts_code=','.join(batch_stocks),
-                    fields=['ts_code', 'list_date']
-                )
-                stock_list_dates_all.append(batch_data)
-                time.sleep(0.1)  # 添加延时避免频繁调用
-                
-            # 合并所有批次的结果
-            stock_list_dates = pd.concat(stock_list_dates_all, ignore_index=True)
+            # 添加月份列
+            zhongzheng500_stocks['month'] = pd.to_datetime(zhongzheng500_stocks['trade_date'], format='%Y%m%d').dt.strftime('%Y%m')
             
             # 读取交易日历
             trade_calendar = pd.read_csv("数据/沪深交易所交易日历.csv")
             trade_calendar = trade_calendar[trade_calendar['is_open'] == 1]
             
-            # 将now_date转换为datetime对象
-            now_date = pd.to_datetime(now_date)
+            # 按月份分组
+            grouped = zhongzheng500_stocks.groupby('month')
+            qualified_stocks_all = []
             
-            # 计算每只股票的上市交易日数
-            qualified_stocks = []
-            for _, stock in stock_list_dates.iterrows():
-                list_date = pd.to_datetime(stock['list_date'])
-                # 获取上市日期到now_date之间的交易日数
-                trading_days = trade_calendar[
-                    (trade_calendar['cal_date'] >= int(list_date.strftime('%Y%m%d'))) & 
-                    (trade_calendar['cal_date'] <= int(now_date.strftime('%Y%m%d')))
-                ].shape[0]
+            # 处理每个月份的股票
+            for month, month_data in grouped:
+                print(f"处理 {month} 月份的数据...")
+                month_end = pd.to_datetime(month + '01') + pd.offsets.MonthEnd(0)
                 
-                if trading_days >= threshold:
-                    qualified_stocks.append(stock['ts_code'])
+                # 获取当月成分股的上市日期
+                month_stocks = ','.join(month_data['con_code'].unique())
+                stock_list_dates = pro.stock_basic(
+                    ts_code=month_stocks,
+                    fields=['ts_code', 'list_date']
+                )
+                # time.sleep(0.3)  # 添加延时避免频繁调用
+                
+                # 检查每只股票
+                for _, stock_row in month_data.iterrows():
+                    stock_info = stock_list_dates[stock_list_dates['ts_code'] == stock_row['con_code']]
+                    if not stock_info.empty:
+                        list_date = pd.to_datetime(stock_info.iloc[0]['list_date'])
+                        
+                        # 计算到月末的交易日数
+                        trading_days = trade_calendar[
+                            (trade_calendar['cal_date'] >= int(list_date.strftime('%Y%m%d'))) & 
+                            (trade_calendar['cal_date'] <= int(month_end.strftime('%Y%m%d')))
+                        ].shape[0]
+                        
+                        # 如果交易日数满足要求，保留该记录
+                        if trading_days >= threshold:
+                            qualified_stocks_all.append({
+                                'ts_code': stock_row['con_code'],
+                                'month': month,
+                                'weight': stock_row['weight']
+                            })
             
             # 创建结果DataFrame并保存
-            result_df = pd.DataFrame({'ts_code': qualified_stocks})
+            result_df = pd.DataFrame(qualified_stocks_all)
             result_df.to_csv("数据/合格中证500成分股.csv", index=False)
             
-            return qualified_stocks
+            return result_df
             
         except Exception as e:
             print(f"过滤股票时出错: {str(e)}")
             return None
+    
+    @staticmethod
+    def get_30min_data():
+        try:
+            # 读取合格的中证500成分股
+            qualified_stocks = pd.read_csv("数据/合格中证500成分股.csv")
+            unique_stocks = qualified_stocks['ts_code'].unique()
+            # 转换股票代码格式
+            def convert_stock_code(ts_code):
+                # 分离代码和市场
+                code, market = ts_code.split('.')
+                # 转换为小写并调整顺序
+                if market == 'SZ':
+                    return f"sz.{code}"
+                else:  # market == 'SH'
+                    return f"sh.{code}"
+            # 转换股票代码
+            unique_stocks = [convert_stock_code(stock) for stock in unique_stocks]
+            # 设定时间范围
+
+            
+            # 遍历每只股票
+            for stock in unique_stocks:
+                print(f"正在获取 {stock} 的30分钟数据...")
+                
+                # 分时间段获取数据
+                start_date="20190101"
+                end_date="20231231"
+                start_date= f"{start_date[:4]}-{start_date[4:6]}-{start_date[6:]}"
+                end_date= f"{end_date[:4]}-{end_date[4:6]}-{end_date[6:]}"
+                print(f"获取 {start_date} 到 {end_date} 的数据...")
+                try:
+                    rs=bs.query_history_k_data_plus(
+                        code=stock,
+                        fields="time,code,open,high,low,close,volume,amount,adjustflag",
+                        start_date='2019-01-01',
+                        end_date='2023-12-31',
+                        frequency="30",
+                        adjustflag="3",
+                        
+                    )
+                    data_list = []
+                    while (rs.error_code == '0') & rs.next():
+                        # 获取一条记录，将记录合并在一起
+                        data_list.append(rs.get_row_data())
+                    result = pd.DataFrame(data_list, columns=rs.fields)
+                        
+                    if result is not None and not result.empty:
+                        # 保存数据
+                        file_path = f"数据/30分钟线/{stock}.csv"
+                        
+                        # 确保目录存在
+                        os.makedirs("数据/30分钟线", exist_ok=True)
+                        
+                        # 追加模式保存数据
+                        result.to_csv(
+                            file_path, 
+                            mode='a', 
+                            index=False, 
+                            header=not os.path.exists(file_path)
+                        )
+                        
+                        # 避免频繁调用
+                        # time.sleep(0.3)
+                        
+                except Exception as e:
+                    print(f"获取 {stock} 在 {start_date}-{end_date} 期间的数据时出错: {str(e)}")
+                    continue
+                
+                print(f"{stock} 的数据获取完成")
+                
+            print("所有股票的30分钟数据获取完成")
+            
+        except Exception as e:
+            print(f"获取30分钟数据时出错: {str(e)}")
+
+    # @staticmethod
+    # def get_index_30min_data():
+    #     try:
+    #         # 中证500指数代码
+    #         index_code = "sh.000905"  # 中证500指数的baostock代码
+            
+    #         print(f"正在获取 {index_code} 的30分钟数据...")
+            
+    #         # 设定时间范围
+    #         start_date = "20190101"
+    #         end_date = "20231231"
+    #         start_date = f"{start_date[:4]}-{start_date[4:6]}-{start_date[6:]}"
+    #         end_date = f"{end_date[:4]}-{end_date[4:6]}-{end_date[6:]}"
+    #         print(f"获取 {start_date} 到 {end_date} 的数据...")
+            
+    #         try:
+    #             result=ak.index_zh_a_hist_min_em(
+    #                 symbol="000905",
+    #                 period="30",
+    #                 start_date="20250201",
+    #                 end_date="20250214"
+    #             )
+                
+
+    #             print(result)
+    #             if result is not None and not result.empty:
+    #                 # 保存数据
+    #                 file_path = f"数据/30分钟线/{index_code}.csv"
+                    
+    #                 # 确保目录存在
+    #                 os.makedirs("数据/30分钟线", exist_ok=True)
+                    
+    #                 # 保存数据
+    #                 result.to_csv(
+    #                     file_path,
+    #                     mode='a',
+    #                     index=False,
+    #                     header=not os.path.exists(file_path)
+    #                 )
+                    
+    #             print(f"{index_code} 的数据获取完成")
+                
+    #         except Exception as e:
+    #             print(f"获取 {index_code} 在 {start_date}-{end_date} 期间的数据时出错: {str(e)}")
+    #             return None
+            
+    #         print("中证500指数的30分钟数据获取完成")
+            
+    #     except Exception as e:
+    #         print(f"获取30分钟数据时出错: {str(e)}")
 
 if __name__ == "__main__":
     print("请选择要获取的数据类型：")
@@ -232,11 +365,13 @@ if __name__ == "__main__":
     print("2. 获取日线行情")
     print("3. 获取指数列表")
     print("4. 获取中证500成分股")
-    print("5. 获取中证500成分股停牌信息(自2014-01-01至2020-12-31)")
-    print("6. 获取沪深股票单日停牌信息(自2014-01-01至2020-12-31)")
+    print("5. 获取中证500成分股停牌信息(自2019-01-01至2023-12-31)")
+    print("6. 获取沪深股票单日停牌信息(自2019-01-01至2023-12-31)")
     print("7. 获取沪深交易所交易日历")
     print("8. 过滤掉上市天数不足threshold的股票")
-    choice = input("请输入选项(1或2):")
+    print("9. 获取个股30分钟线数据")
+    # print("10. 获取中证500指数30分钟线数据")
+    choice = input("请输入选项(1或2或3或4或5或6或7或8或9):")
     
     if choice == "1":
         print("正在获取股票列表...")
@@ -245,8 +380,8 @@ if __name__ == "__main__":
         
     elif choice == "2":
         print("正在获取日线行情...")
-        start_date = "20010101"
-        end_date = "20250206"
+        start_date = "20190101"
+        end_date = "20250214"
         
         
         current_date = datetime.strptime(start_date, "%Y%m%d")
@@ -269,8 +404,8 @@ if __name__ == "__main__":
         print("指数列表已保存到'数据/指数列表.csv'")
 
     elif choice=="4":
-        start_date="20140101"
-        end_date="20201231"
+        start_date="20190101"
+        end_date="20231231"
         
         current_date = datetime.strptime(start_date, "%Y%m%d")
         end_datetime = datetime.strptime(end_date, "%Y%m%d")
@@ -289,8 +424,8 @@ if __name__ == "__main__":
         print("中证500成分股已保存到'数据/中证500成分股.csv'")
 
     elif choice=="5":
-        start_date="20140101"
-        end_date="20201231"
+        start_date="20190101"
+        end_date="20231231"
         current_date = datetime.strptime(start_date, "%Y%m%d")
         end_datetime = datetime.strptime(end_date, "%Y%m%d")
         
@@ -324,8 +459,8 @@ if __name__ == "__main__":
             
 
     elif choice=="6":
-        start_date="20140101"
-        end_date="20201231"
+        start_date="20190101"
+        end_date="20231231"
         current_date = datetime.strptime(start_date, "%Y%m%d")
         end_datetime = datetime.strptime(end_date, "%Y%m%d")
         
@@ -362,9 +497,18 @@ if __name__ == "__main__":
         print("交易日历已保存到'数据/交易日历.csv'")
 
     elif choice=="8":
-        getdata.filter_zhongzheng500_paused_stocks(threshold=360,
-                                                   now_date="20201231")
+        getdata.filter_zhongzheng500_paused_stocks(threshold=360)
+        print("合格中证500成分股已保存到'数据/合格中证500成分股.csv'")
+
+    elif choice=="9":
+        getdata.get_30min_data()
+        print("所有股票的30分钟数据已保存到'数据/30分钟线'目录下")
+
+    # elif choice=="10":
+    #     getdata.get_index_30min_data()
+    #     print("中证500指数的30分钟数据已保存到'数据/30分钟线'目录下")
+
     else:
-        print("输入无效,请输入1或2")
+        print("输入无效,请输入1或2或3或4或5或6或7或8或9")
 
     
