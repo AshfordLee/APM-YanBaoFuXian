@@ -36,7 +36,7 @@ class APM():
         try:
             # 读取所有日线数据
             file_path = "数据/日线行情.csv"
-            print(f"尝试读取日线数据: {file_path}")
+            # print(f"尝试读取日线数据: {file_path}")
             
             try:
                 # 读取日线数据
@@ -98,7 +98,7 @@ class APM():
         try:
             # 读取基准指数日线数据
             file_path = "数据/日线行情.csv"
-            print(f"尝试读取基准指数日线数据: {file_path}")
+            # print(f"尝试读取基准指数日线数据: {file_path}")
             
             try:
                 # 读取日线数据
@@ -157,7 +157,7 @@ class APM():
                 
                 # 读取该股票的30分钟数据
                 file_path = f"数据/30分钟线/{baostock_code}.csv"
-                print(f"尝试读取文件: {file_path}")
+                # print(f"尝试读取文件: {file_path}")
                 
                 try:
                     df = pd.read_csv(file_path)
@@ -206,7 +206,7 @@ class APM():
             
             # 读取基准指数的30分钟数据
             file_path = f"数据/30分钟线/{baostock_code}.csv"
-            print(f"尝试读取基准指数30分钟数据: {file_path}")
+            # print(f"尝试读取基准指数30分钟数据: {file_path}")
             
             try:
                 df = pd.read_csv(file_path)
@@ -245,14 +245,14 @@ class APM():
           
     def get_30min_close_data(self):
         #获取30分钟线上的收盘价
-        self.close_data_30min=pd.pivot(self.data_30min,
+        self.close_data_30min=pd.pivot_table(self.data_30min,
                                        index='time',
                                        columns='code',
                                        values='close')
         return self.close_data_30min
     
     def get_30min_open_data(self):
-        self.open_data_30min=pd.pivot(self.data_30min,
+        self.open_data_30min=pd.pivot_table(self.data_30min,
                                       index='time',
                                       columns='code',
                                       values='open')
@@ -277,27 +277,29 @@ class APM():
         self.daily_returns = daily_returns.iloc[1:].sum()
         
         # 5. 去掉基准指数的收益率
-        self.daily_returns = self.daily_returns.drop(self.benchmark)
+        # self.daily_returns = self.daily_returns.drop(self.benchmark)
 
         #日度收益率
         return self.daily_returns
 
     def get_overnight_ret(self):
         # 获取隔日收益率
-        # 1. 先将数据透视为每个股票一列的形式
-        daily_pivot = pd.pivot_table(self.daily_data,
+        daily_data = self.daily_data.copy()
+        
+        # 1. 进行透视
+        daily_pivot = pd.pivot_table(daily_data,
                                    index='trade_date',
                                    columns='ts_code',
                                    values=['close', 'open'])
         
-        # 2. 确保日期索引格式正确
-        daily_pivot.index = pd.to_datetime(daily_pivot.index).strftime('%Y-%m-%d')
+        # 删除包含NaN的行
+
         
-        # 3. 计算隔日收益率：今日开盘价/昨日收盘价
+        # 2. 计算隔日收益率：今日开盘价/昨日收盘价
         overnight_returns = (daily_pivot['open'] / 
                            daily_pivot['close'].shift(1))
         
-        # 4. 去掉第一行（因为shift后第一行是NaN）
+        # 3. 去掉第一行（因为shift后第一行是NaN）
         overnight_returns = overnight_returns.iloc[1:]
         
         self.overnight_returns = overnight_returns
@@ -316,6 +318,7 @@ class APM():
 
     @staticmethod
     def _rls(df):
+        df=df.fillna(1)
         df=df.set_index('code')
         X=sm.add_constant(df['benchmark'])
         y=df['log_ret']
@@ -341,8 +344,22 @@ class APM():
             am=self.get_logret(start=pos1[0],end=pos1[1])
         pm=self.get_logret(start=pos2[0],end=pos2[1])
         #传回两个pd.series构成的Tuple
+        # print(am)
+        # print(pm)
         result1=self.regression(am)
         result2=self.regression(pm)
+        # print(result1)
+        # print(result2)
+
+        # if np.any(np.isnan(result1)) or np.any(np.isinf(result1)):
+        #     print("警告：result1 包含 NaN 或 Inf 值")
+        #     print("NaN 数量:", np.sum(np.isnan(result1)))
+        #     print("Inf 数量:", np.sum(np.isinf(result1)))
+            
+        # if np.any(np.isnan(result2)) or np.any(np.isinf(result2)):
+        #     print("警告：result2 包含 NaN 或 Inf 值")
+        #     print("NaN 数量:", np.sum(np.isnan(result2)))
+        #     print("Inf 数量:", np.sum(np.isinf(result2)))
         return result1,result2
 
     def calc_factor(self,interval):
@@ -354,7 +371,11 @@ class APM():
         
         resid1,resid2=self.calc_resid(INTERVAL_DICT[interval][0],INTERVAL_DICT[interval][1])
         diff=resid1-resid2
-
+        # 检查 diff 中的无效值
+        # if np.any(np.isnan(diff)) or np.any(np.isinf(diff)):
+        #     print("警告：diff 包含 NaN 或 Inf 值")
+        #     print("NaN 数量:", np.sum(np.isnan(diff)))
+        #     print("Inf 数量:", np.sum(np.isinf(diff)))
         diff_std_normal=diff.groupby(level='code').apply(
             lambda x:(x.mean()*np.sqrt(len(x)))/x.std()
         )
@@ -363,6 +384,7 @@ class APM():
 
         X=self.daily_returns
         Y=diff_std_normal
+
         mod=sm.OLS(Y,X)
         res=mod.fit()
         return res.resid
@@ -382,9 +404,9 @@ if __name__ == "__main__":
     apm.get_30min_open_data()
     apm.get_daily_profit_percent()
     overnight_returns=apm.get_overnight_ret()
-    logret=apm.get_logret(start='10:00:00',end='10:30:00')
-    x=apm.regression(logret)
-    x=apm.calc_factor('APM_RAW')
+    # logret=apm.get_logret(start='10:00:00',end='10:30:00')
+    # x=apm.regression(logret)
+    x=apm.calc_factor('APM_1')
     print(x)
 
     # print(logret)
