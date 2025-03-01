@@ -394,7 +394,7 @@ if __name__ == "__main__":
             benchmark='600008.SH',
             watch_back_date='2023-01-01')
     #网上没找到30分钟的指数数据，这里就随便
-    #挑一个000671.SZ当指数用作基准数据
+    #挑一个600008.SH当指数用作基准数据
 
     apm.get_daily_data()
     apm.get_benchmark_data()

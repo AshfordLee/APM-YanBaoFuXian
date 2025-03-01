@@ -1,5 +1,5 @@
 import pandas as pd
-from APM因子构造 import APM
+from .APM因子构造 import APM
 import numpy as np
 from tqdm import tqdm
 
