@@ -54,7 +54,7 @@ scipy
 1. 克隆项目到本地：
    ```bash
    git clone <项目地址>
-   cd Tushare研报复现
+   cd APM-YanBaoFuXian
    ```
 
 2. 创建并激活虚拟环境：
